@@ -129,12 +129,6 @@
 3. **Pianificazione** misure sicurezza specifiche
 4. **Monitoraggio** evoluzione situazione temporale
 
-### Note Tecniche
-
-- **Nessuna animazione**: Aggiornamento manuale come richiesto
-- **Nessun calcolo onde**: Focus esclusivo su densità traffico
-- **Backend invariato**: Modello MSTFFN originale preservato
-- **Dati reali**: Solo AIS da Uniparthenope, nessuna simulazione
 
 ---
 **Versione**: 1.0  
