@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MSTFFN Maritime Traffic - Napoli</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    body { margin:0; font-family: Segoe UI, Tahoma, Geneva, Verdana, sans-serif; }
+    #map { height: 100vh; width: 100vw; }
+    #panel {
+      position:absolute; top:10px; right:10px; z-index:1000;
+      background:#fff; padding:12px; border-radius:8px; width:320px;
+      box-shadow:0 2px 12px rgba(0,0,0,.2);
+      max-height: 90vh; overflow:auto;
+    }
+    #legend {
+      position:absolute; top:10px; left:10px; z-index:1000;
+      background:#fff; padding:10px; border-radius:6px; width:200px;
+      box-shadow:0 2px 8px rgba(0,0,0,.15);
+      font-size:12px;
+    }
+    #legend h4 { margin:0 0 8px 0; font-size:13px; }
+    #legend .row { margin:4px 0; display:flex; align-items:center; }
+    #legend .color-box { width:14px; height:14px; border-radius:50%; margin-right:8px; border:1px solid #ccc; }
+    button { width:100%; padding:10px; border:0; border-radius:6px; background:#2c3e50; color:#fff; cursor:pointer; font-weight:600; }
+    button:hover { background:#34495e; }
+    .row { margin: 10px 0; }
+    label { display:block; font-weight:600; margin-bottom:4px; }
+    input, select { width:100%; padding:8px; border:1px solid #ddd; border-radius:6px; }
+    .small { font-size: 12px; color:#555; }
+    .badge { display:inline-block; padding:2px 6px; border-radius:999px; background:#eef; font-size:12px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="legend">
+    <h4>Legenda</h4>
+    <div class="row"><div class="color-box" style="background:#2ecc71;"></div>0-5 nodi (lento)</div>
+    <div class="row"><div class="color-box" style="background:#3498db;"></div>6-15 nodi (medio)</div>
+    <div class="row"><div class="color-box" style="background:#e74c3c;"></div>16+ nodi (veloce)</div>
+    <div class="row"><div class="color-box" style="background:#111; fill-opacity:0.5;"></div>Punto reale (ultimo per nave)</div>
+    <div class="row"><div class="color-box" style="background:#888; fill-opacity:0.3;"></div>Nuvola probabilità (MSTFFN)</div>
+    <div class="row"><small>Click: seleziona navi vicine (150 m)<br>Shift+click: aggiungi alla selezione</small></div>
+  </div>
+  <div id="panel">
+    <div class="row">
+      <label>Dataset verifica (meteo.uniparthenope)</label>
+      <select id="selDataset">
+        <option value="aisnet_20260120Z082324.csv" selected>2026-01-20 08:23:24Z</option>
+        <option value="aisnet_20260117Z120457.csv">2026-01-17 12:04:57Z</option>
+        <option value="aisnet_20260118Z034050.csv">2026-01-18 03:40:50Z</option>
+        <option value="aisnet_20260119Z224150.csv">2026-01-19 22:41:50Z</option>
+      </select>
+      <div class="small">Carica un CSV reale dal portale uniparthenope e usalo per heatmap e predizione MSTFFN.</div>
+    </div>
+
+    <div class="row">
+      <button id="btnLoad">1) Carica AIS 2026 (backend)</button>
+      <div class="small" id="loadStatus">Backend non inizializzato</div>
+    </div>
+
+    <div class="row">
+      <label>Layer</label>
+      <div>
+        <label><input type="checkbox" id="cbPoints" checked /> Punti reali</label>
+        <label><input type="checkbox" id="cbTraj" /> Traiettorie (campione)</label>
+        <label><input type="checkbox" id="cbPred" checked /> Predetto (nuvola probabilità)</label>
+      </div>
+    </div>
+
+    <div class="row">
+      <label>Orizzonte predizione</label>
+      <select id="selH">
+        <option value="5">+5m</option>
+        <option value="15">+15m</option>
+        <option value="30" selected>+30m</option>
+        <option value="60">+60m</option>
+      </select>
+      <button id="btnPredict" style="margin-top:8px;">2) Predici con MSTFFN</button>
+      <div class="small" id="predStatus">Nessuna predizione</div>
+    </div>
+
+    <div class="row">
+      <div class="small">
+        Nota: la predizione MSTFFN viene visualizzata come <span class="badge">nuvola di probabilità</span> nel tempo futuro selezionato.
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API = 'http://127.0.0.1:8006/api';
+
+    const map = L.map('map').setView([40.8518, 14.2681], 10);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
+
+    const pointsLayer = L.layerGroup().addTo(map);
+    const trajLayer = L.layerGroup();
+    const predPointsLayer = L.layerGroup().addTo(map);
+    const predLinesLayer = L.layerGroup().addTo(map);
+
+    const selectedMMSI = new Set();
+    let lastRealPoints = null; // GeoJSON FeatureCollection
+    let lastMarkerByMMSI = new Map();
+    const colorByMMSI = new Map();
+
+    function setStatus(id, txt) { document.getElementById(id).textContent = txt; }
+
+    async function loadAIS() {
+      setStatus('loadStatus', 'Caricamento...');
+      const filename = document.getElementById('selDataset').value;
+      const r = await fetch(`${API}/ais/load?filename=${encodeURIComponent(filename)}`, { method: 'POST' });
+      if (!r.ok) throw new Error(await r.text());
+      const js = await r.json();
+      const ff = js.flow_freq ? ` | flow_freq=${js.flow_freq}` : '';
+      const src = js.source_url ? ` | ${js.source_url}` : '';
+      setStatus('loadStatus', `OK: ${js.rows} righe | MMSI: ${js.mmsi_unique}${ff}${src}`);
+
+      await refreshRealLayers();
+    }
+
+    async function refreshRealLayers() {
+      pointsLayer.clearLayers();
+      lastMarkerByMMSI = new Map();
+      const r = await fetch(`${API}/ais/points?limit=20000`);
+      const gj = await r.json();
+      lastRealPoints = gj;
+      const geo = L.geoJSON(gj, {
+        onEachFeature: (f, layer) => {
+          layer.on('click', (e) => {
+            const m = (f.properties && f.properties.mmsi) ? String(f.properties.mmsi) : null;
+            if (!m) return;
+
+            // Se shift non è premuto: selezione singola (reset)
+            if (!e.originalEvent.shiftKey) selectedMMSI.clear();
+
+            if (selectedMMSI.has(m)) selectedMMSI.delete(m);
+            else selectedMMSI.add(m);
+
+            updateSelectionStyles();
+            // predici solo se c'è almeno una nave selezionata
+            if (selectedMMSI.size > 0) predict(Array.from(selectedMMSI));
+          });
+
+          const m = (f.properties && f.properties.mmsi) ? String(f.properties.mmsi) : null;
+          if (m) lastMarkerByMMSI.set(m, layer);
+        },
+        pointToLayer: (f, latlng) => {
+          const sp = f.properties.speed || 0;
+          const color = sp <= 5 ? '#2ecc71' : (sp <= 15 ? '#3498db' : '#e74c3c');
+          return L.circleMarker(latlng, { radius: 3, color, weight: 1, fillOpacity: 0.8 });
+        }
+      });
+      geo.addTo(pointsLayer);
+
+      // trajectories optional
+      trajLayer.clearLayers();
+      const rt = await fetch(`${API}/ais/trajectories?vessel_limit=200`);
+      const gjt = await rt.json();
+      const geot = L.geoJSON(gjt, { style: { color: '#111', weight: 1, opacity: 0.6 }});
+      geot.addTo(trajLayer);
+
+      updateSelectionStyles();
+    }
+
+    function updateSelectionStyles() {
+      for (const [m, layer] of lastMarkerByMMSI.entries()) {
+        if (!layer || !layer.setStyle) continue;
+        if (selectedMMSI.has(m)) {
+          // nave selezionata: più intensa (testa della fila)
+          layer.setStyle({ weight: 3, fillOpacity: 1.0 });
+        } else {
+          // nave non selezionata: visibilità normale (come prima)
+          layer.setStyle({ weight: 1, fillOpacity: 0.8 });
+        }
+      }
+    }
+
+    function mmsiColor(m) {
+      const key = String(m);
+      if (colorByMMSI.has(key)) return colorByMMSI.get(key);
+      let h = 0;
+      for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+      const hue = h % 360;
+      const col = `hsl(${hue}, 70%, 45%)`;
+      colorByMMSI.set(key, col);
+      return col;
+    }
+
+    // Click su mappa: seleziona un gruppo di navi vicine (entro raggio)
+    map.on('click', (e) => {
+      if (!lastRealPoints || !lastRealPoints.features) return;
+      const radiusMeters = 150; // gruppo molto vicino (ridotto da 500)
+      const keepExisting = e.originalEvent.shiftKey;
+      if (!keepExisting) selectedMMSI.clear();
+
+      const center = e.latlng;
+      for (const f of lastRealPoints.features) {
+        if (!f.geometry || f.geometry.type !== 'Point') continue;
+        const coords = f.geometry.coordinates;
+        const ll = L.latLng(coords[1], coords[0]);
+        if (center.distanceTo(ll) <= radiusMeters) {
+          const m = (f.properties && f.properties.mmsi) ? String(f.properties.mmsi) : null;
+          if (m) selectedMMSI.add(m);
+        }
+      }
+
+      updateSelectionStyles();
+      if (selectedMMSI.size > 0) predict(Array.from(selectedMMSI));
+    });
+
+    async function predict(mmsiList = null) {
+      setStatus('predStatus', 'Predizione...');
+      const qs = new URLSearchParams();
+      qs.append('horizons_min', '5');
+      qs.append('horizons_min', '15');
+      qs.append('horizons_min', '30');
+      qs.append('horizons_min', '60');
+      if (Array.isArray(mmsiList)) {
+        for (const m of mmsiList) qs.append('mmsi', String(m));
+      }
+      const r = await fetch(`${API}/predict?${qs.toString()}`, { method: 'POST' });
+      if (!r.ok) throw new Error(await r.text());
+      const js = await r.json();
+      const h = document.getElementById('selH').value;
+      const layer = js.layers[h];
+
+      const centerFeat = (layer.points.features || []).find(f => f.properties && f.properties.kind === 'center');
+      const tPred = (centerFeat && centerFeat.properties && centerFeat.properties.t) ? centerFeat.properties.t : '';
+      const sel = Array.isArray(mmsiList) ? ` | sel=${mmsiList.length}` : '';
+      const hMinList = Array.isArray(js.horizons_min) ? js.horizons_min.map(x => String(x)) : ['5','15','30','60'];
+      const idx = Math.max(0, hMinList.indexOf(String(h)));
+      const mu = (js.mu && typeof js.mu[idx] === 'number') ? js.mu[idx] : 0;
+      const sigma = (js.sigma && typeof js.sigma[idx] === 'number') ? js.sigma[idx] : 0;
+      setStatus('predStatus', `t_ref=${js.t_ref} | t_pred=${tPred}${sel} | μ=${mu.toFixed(2)} | σ=${sigma.toFixed(2)}`);
+
+      // predicted probability cloud
+      predPointsLayer.clearLayers();
+      predLinesLayer.clearLayers();
+
+      const centersByMMSI = new Map();
+      for (const f of (layer.points.features || [])) {
+        const m = (f.properties && f.properties.mmsi) ? String(f.properties.mmsi) : null;
+        if (!m) continue;
+        if (f.properties.kind === 'center') {
+          const c = f.geometry.coordinates;
+          centersByMMSI.set(m, L.latLng(c[1], c[0]));
+        }
+      }
+
+      for (const [m, centerLL] of centersByMMSI.entries()) {
+        const realLayer = lastMarkerByMMSI.get(m);
+        if (!realLayer) continue;
+        const realLL = realLayer.getLatLng ? realLayer.getLatLng() : null;
+        if (!realLL) continue;
+        const col = mmsiColor(m);
+        // linea di traiettoria: visibile ma meno intensa della nave selezionata
+        L.polyline([realLL, centerLL], { color: col, weight: 2, opacity: 0.7 }).addTo(predLinesLayer);
+      }
+
+      const geo = L.geoJSON(layer.points, {
+        onEachFeature: (f, layer) => {
+          const m = (f.properties && f.properties.mmsi) ? String(f.properties.mmsi) : '';
+          if (m) layer.bindTooltip(`MMSI ${m}`, { direction: 'top', opacity: 0.9 });
+        },
+        pointToLayer: (f, latlng) => {
+          const kind = (f.properties && f.properties.kind) ? f.properties.kind : 'sample';
+          const p = (f.properties && typeof f.properties.p === 'number') ? f.properties.p : 0.3;
+          const radius = kind === 'center' ? 3.5 : 2.0;
+          const alpha = kind === 'center' ? 0.9 : Math.max(0.12, Math.min(0.6, p * 0.6));
+          const m = (f.properties && f.properties.mmsi) ? String(f.properties.mmsi) : '';
+          const color = kind === 'center' ? '#111' : (m ? mmsiColor(m) : '#8e44ad');
+          return L.circleMarker(latlng, { radius, color, weight: 1, fillOpacity: alpha });
+        }
+      });
+      geo.addTo(predPointsLayer);
+    }
+
+    function applyToggles() {
+      const cbPoints = document.getElementById('cbPoints').checked;
+      const cbTraj = document.getElementById('cbTraj').checked;
+      const cbPred = document.getElementById('cbPred').checked;
+
+      if (cbPoints) map.addLayer(pointsLayer); else map.removeLayer(pointsLayer);
+      if (cbTraj) map.addLayer(trajLayer); else map.removeLayer(trajLayer);
+      if (cbPred) {
+        map.addLayer(predPointsLayer);
+        map.addLayer(predLinesLayer);
+      } else {
+        map.removeLayer(predPointsLayer);
+        map.removeLayer(predLinesLayer);
+      }
+    }
+
+    document.getElementById('btnLoad').addEventListener('click', async () => {
+      try { await loadAIS(); applyToggles(); }
+      catch(e) { alert('Errore load AIS: ' + e.message); }
+    });
+
+    document.getElementById('btnPredict').addEventListener('click', async () => {
+      try { await predict(); applyToggles(); }
+      catch(e) { alert('Errore predict: ' + e.message); }
+    });
+
+    document.getElementById('selH').addEventListener('change', async () => {
+      // re-run predict to swap layer quickly
+      try { await predict(); applyToggles(); }
+      catch(e) { /* ignore */ }
+    });
+
+    ['cbPoints','cbTraj','cbPred'].forEach(id => {
+      document.getElementById(id).addEventListener('change', applyToggles);
+    });
+
+    applyToggles();
+  </script>
+</body>
+</html>

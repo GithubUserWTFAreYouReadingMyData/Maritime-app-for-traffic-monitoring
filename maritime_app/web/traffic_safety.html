@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Maritime Traffic Safety - Density Grid System</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    body { 
+      margin: 0; 
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+      background: #f5f5f5; 
+    }
+    
+    #map { 
+      height: 100vh; 
+      width: 100vw; 
+    }
+    
+    #control-panel {
+      position: absolute; 
+      top: 10px; 
+      right: 10px; 
+      z-index: 1000;
+      background: white; 
+      padding: 20px; 
+      border-radius: 8px; 
+      width: 320px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+      max-height: 90vh; 
+      overflow-y: auto;
+    }
+    
+    #legend {
+      position: absolute; 
+      top: 10px; 
+      left: 10px; 
+      z-index: 1000;
+      background: white; 
+      padding: 15px; 
+      border-radius: 6px; 
+      width: 200px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.1);
+      font-size: 12px;
+    }
+    
+    #legend h4 { 
+      margin: 0 0 10px 0; 
+      font-size: 14px; 
+      color: #2c3e50; 
+    }
+    
+    .legend-item { 
+      margin: 8px 0; 
+      display: flex; 
+      align-items: center; 
+    }
+    
+    .legend-color { 
+      width: 20px; 
+      height: 20px; 
+      border-radius: 4px; 
+      margin-right: 8px; 
+      border: 1px solid #ddd; 
+    }
+    
+    .btn { 
+      width: 100%; 
+      padding: 12px; 
+      border: 0; 
+      border-radius: 6px; 
+      background: #2c3e50; 
+      color: white; 
+      cursor: pointer; 
+      font-weight: 600; 
+      transition: all 0.3s; 
+      margin: 8px 0;
+    }
+    
+    .btn:hover { 
+      background: #34495e; 
+      transform: translateY(-1px); 
+    }
+    
+    .btn:disabled { 
+      background: #95a5a6; 
+      cursor: not-allowed; 
+      transform: none; 
+    }
+    
+    .form-group { 
+      margin: 15px 0; 
+    }
+    
+    label { 
+      display: block; 
+      font-weight: 600; 
+      margin-bottom: 5px; 
+      color: #2c3e50; 
+    }
+    
+    input, select { 
+      width: 100%; 
+      padding: 10px; 
+      border: 1px solid #ddd; 
+      border-radius: 6px; 
+      font-size: 14px; 
+      box-sizing: border-box;
+    }
+    
+    .status { 
+      padding: 10px; 
+      border-radius: 4px; 
+      margin: 10px 0; 
+      font-size: 12px; 
+    }
+    
+    .status.success { 
+      background: #d4edda; 
+      color: #155724; 
+      border: 1px solid #c3e6cb; 
+    }
+    
+    .status.error { 
+      background: #f8d7da; 
+      color: #721c24; 
+      border: 1px solid #f5c6cb; 
+    }
+    
+    .status.loading { 
+      background: #fff3cd; 
+      color: #856404; 
+      border: 1px solid #ffeaa7; 
+    }
+    
+    .stats-grid {
+      display: grid; 
+      grid-template-columns: 1fr 1fr; 
+      gap: 10px; 
+      margin: 15px 0;
+    }
+    
+    .stat-item {
+      background: #f8f9fa; 
+      padding: 10px; 
+      border-radius: 4px; 
+      text-align: center;
+    }
+    
+    .stat-value { 
+      font-size: 18px; 
+      font-weight: bold; 
+      color: #2c3e50; 
+    }
+    
+    .stat-label { 
+      font-size: 11px; 
+      color: #7f8c8d; 
+    }
+
+    .cell-popup {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+
+    .cell-popup h5 {
+      margin: 0 0 10px 0;
+      color: #2c3e50;
+      font-size: 14px;
+    }
+
+    .timeline-item {
+      margin: 5px 0;
+      padding: 5px;
+      border-radius: 3px;
+      font-size: 11px;
+    }
+
+    .risk-low { background: #d4edda; color: #155724; }
+    .risk-medium { background: #fff3cd; color: #856404; }
+    .risk-high { background: #f8d7da; color: #721c24; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  
+  <!-- Legend -->
+  <div id="legend">
+    <h4>Livelli di Rischio</h4>
+    <div class="legend-item">
+      <div class="legend-color" style="background: #28a745;"></div>
+      <span>Basso (0-2 navi)</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-color" style="background: #ffc107;"></div>
+      <span>Medio (3-5 navi)</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-color" style="background: #dc3545;"></div>
+      <span>Alto (6+ navi)</span>
+    </div>
+    
+    <h4 style="margin-top: 15px;">Velocità Navi</h4>
+    <div class="legend-item">
+      <div class="legend-color" style="background: #0000ff;"></div>
+      <span>Lento (0-5 nodi)</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-color" style="background: #ffa500;"></div>
+      <span>Medio (5-15 nodi)</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-color" style="background: #ff0000;"></div>
+      <span>Veloce (15+ nodi)</span>
+    </div>
+    
+    <h4 style="margin-top: 15px;">Altri Elementi</h4>
+    <div class="legend-item">
+      <div class="legend-color" style="background: #0066cc; height: 2px; margin-top: 8px;"></div>
+      <span>Traiettorie</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-color" style="background: #cccccc;"></div>
+      <span>Celle Vuote</span>
+    </div>
+  </div>
+  
+  <!-- Control Panel -->
+  <div id="control-panel">
+    <h3 style="margin-top: 0; color: #2c3e50;">Maritime Traffic Safety</h3>
+    
+    <div id="status" class="status" style="display: none;"></div>
+    
+    <!-- Controls -->
+    <div class="form-group">
+      <label for="time-horizon">Orizzonte Temporale (minuti):</label>
+      <select id="time-horizon">
+        <option value="60">60 minuti</option>
+        <option value="120" selected>120 minuti</option>
+        <option value="180">180 minuti</option>
+      </select>
+    </div>
+    
+    <div class="form-group">
+      <label for="grid-resolution">Risoluzione Griglia:</label>
+      <select id="grid-resolution">
+        <option value="1.0" selected>1.0 km</option>
+        <option value="2.0">2.0 km</option>
+        <option value="0.5">0.5 km</option>
+      </select>
+    </div>
+    
+    <div class="form-group">
+      <label for="timestep-select">Timestep (minuti):</label>
+      <select id="timestep-select" disabled>
+        <option value="">Carica dati prima...</option>
+      </select>
+    </div>
+    
+    <div class="form-group">
+      <label>
+        <input type="checkbox" id="show-trajectories" checked>
+        Mostra traiettorie complete
+      </label>
+      <small style="color: #666; display: block; margin-top: 5px;">
+        Se disattivato, mostra solo le posizioni attuali delle navi
+      </small>
+    </div>
+    
+    <button id="predict-btn" class="btn">Predict Traffic</button>
+    <button id="load-ais-btn" class="btn">Load AIS Data</button>
+    <button id="show-vessels-btn" class="btn">Show AIS Vessels</button>
+    
+    <!-- Statistics -->
+    <div id="stats" style="display: none;">
+      <h4 style="margin: 15px 0 10px 0; color: #2c3e50;">Statistiche</h4>
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div id="total-vessels" class="stat-value">-</div>
+          <div class="stat-label">Navi Totali</div>
+        </div>
+        <div class="stat-item">
+          <div id="max-density" class="stat-value">-</div>
+          <div class="stat-label">Max Navi/Cella</div>
+        </div>
+        <div class="stat-item">
+          <div id="grid-cells" class="stat-value">-</div>
+          <div class="stat-label">Celle Griglia</div>
+        </div>
+        <div class="stat-item">
+          <div id="timesteps" class="stat-value">-</div>
+          <div class="stat-label">Timestep</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Global variables
+    let map;
+    let densityLayers = {};
+    let currentDensityData = null;
+    let aisLayer = null;
+    
+    // API base URL
+    const API_BASE = 'http://127.0.0.1:8007/api';
+    
+    // Initialize map
+    function initMap() {
+      map = L.map('map').setView([40.73, 14.18], 11);
+      
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors'
+      }).addTo(map);
+      
+      // Gulf of Naples bounds
+      const gulfBounds = [
+        [40.50, 13.90], // SW
+        [40.95, 14.45]  // NE
+      ];
+      
+      L.rectangle(gulfBounds, {
+        color: '#2c3e50',
+        weight: 2,
+        fillOpacity: 0.1
+      }).addTo(map);
+      
+      map.fitBounds(gulfBounds);
+    }
+    
+    // Show status message
+    function showStatus(message, type = 'info') {
+      const statusEl = document.getElementById('status');
+      statusEl.className = `status ${type}`;
+      statusEl.textContent = message;
+      statusEl.style.display = 'block';
+      
+      if (type === 'success' || type === 'error') {
+        setTimeout(() => {
+          statusEl.style.display = 'none';
+        }, 5000);
+      }
+    }
+    
+    // Update statistics display
+    function updateStats(stats) {
+      document.getElementById('total-vessels').textContent = stats.total_predicted_vessels || '-';
+      document.getElementById('max-density').textContent = stats.max_vessels_per_cell || '-';
+      document.getElementById('grid-cells').textContent = stats.grid_cells || '-';
+      document.getElementById('timesteps').textContent = stats.timesteps_calculated || '-';
+      document.getElementById('stats').style.display = 'block';
+    }
+    
+    // Get color based on risk level
+    function getRiskColor(riskLevel) {
+      switch(riskLevel) {
+        case 0: return '#28a745'; // green
+        case 1: return '#ffc107'; // yellow  
+        case 2: return '#dc3545'; // red
+        default: return '#6c757d'; // gray
+      }
+    }
+    
+    // Get color based on vessel speed
+    function getVesselColor(speed) {
+      if (speed <= 5) return '#0000ff'; // blue - slow
+      if (speed <= 15) return '#ffa500'; // orange - medium
+      return '#ff0000'; // red - fast
+    }
+    
+    // Load and display AIS vessels
+    async function loadAISVessels() {
+      try {
+        const showTrajectories = document.getElementById('show-trajectories').checked;
+        let aisData;
+        
+        if (showTrajectories) {
+          // Use trajectories endpoint to get ALL vessel positions
+          const response = await fetch(`${API_BASE}/ais/trajectories?vessel_limit=1000`);
+          aisData = await response.json();
+        } else {
+          // Use points endpoint with latest=true to get only current positions
+          const response = await fetch(`${API_BASE}/ais/points?latest=true&limit=10000`);
+          aisData = await response.json();
+        }
+        
+        // Clear existing AIS layer
+        if (aisLayer) {
+          map.removeLayer(aisLayer);
+        }
+        
+        const vessels = [];
+        let totalPositions = 0;
+        let uniqueVessels = 0;
+        
+        if (showTrajectories) {
+          // Show full trajectories
+          aisData.features.forEach(feature => {
+            const coords = feature.geometry.coordinates;
+            const props = feature.properties;
+            
+            if (feature.geometry.type === 'LineString') {
+              uniqueVessels++;
+              
+              // This is a trajectory line
+              const latlngs = coords.map(coord => [coord[1], coord[0]]);
+              
+              const polyline = L.polyline(latlngs, {
+                color: '#0066cc',
+                weight: 2,
+                opacity: 0.6
+              });
+              
+              polyline.bindPopup(`
+                <div>
+                  <strong>Traiettoria Nave ${props.mmsi}</strong><br>
+                  <strong>Punti:</strong> ${coords.length}<br>
+                  <strong>Speed Media:</strong> ${(props.avg_speed || 0).toFixed(1)} nodi<br>
+                  <strong>Periodo:</strong> ${new Date(props.start_time).toLocaleString()} - ${new Date(props.end_time).toLocaleString()}
+                </div>
+              `);
+              
+              vessels.push(polyline);
+              totalPositions += coords.length;
+              
+              // Also add points along trajectory
+              coords.forEach((coord, index) => {
+                const speed = props.speeds ? props.speeds[index] : (props.avg_speed || 0);
+                
+                const circle = L.circle([coord[1], coord[0]], {
+                  radius: 60, // 60m radius
+                  color: getVesselColor(speed),
+                  fillColor: getVesselColor(speed),
+                  fillOpacity: 0.7,
+                  weight: 1
+                });
+                
+                circle.bindPopup(`
+                  <div>
+                    <strong>MMSI:</strong> ${props.mmsi}<br>
+                    <strong>Speed:</strong> ${speed.toFixed(1)} nodi<br>
+                    <strong>Punto:</strong> ${index + 1}/${coords.length}<br>
+                    <strong>Time:</strong> ${props.timestamps ? new Date(props.timestamps[index]).toLocaleString() : 'N/A'}
+                  </div>
+                `);
+                
+                vessels.push(circle);
+              });
+            }
+          });
+        } else {
+          // Show only current positions
+          aisData.features.forEach(feature => {
+            const coords = feature.geometry.coordinates;
+            const props = feature.properties;
+            const speed = props.speed || 0;
+            
+            uniqueVessels++;
+            totalPositions++;
+            
+            const circle = L.circle([coords[1], coords[0]], {
+              radius: 80, // 80m radius for current positions
+              color: getVesselColor(speed),
+              fillColor: getVesselColor(speed),
+              fillOpacity: 0.8,
+              weight: 2
+            });
+            
+            circle.bindPopup(
+              `<div>
+                <strong>MMSI:</strong> ${props.mmsi}<br>
+                <strong>Speed:</strong> ${speed.toFixed(1)} nodi<br>
+                <strong>Course:</strong> ${props.course || 'N/A'}<br>
+                <strong>Time:</strong> ${new Date(props.timestamp).toLocaleString()}<br>
+                <strong>Posizione:</strong> Attuale
+              </div>`
+            );
+            
+            vessels.push(circle);
+          });
+        });
+        
+        aisLayer = L.layerGroup(vessels);
+        map.addLayer(aisLayer);
+        
+        const modeText = showTrajectories ? 'posizioni' : 'navi attuali';
+        showStatus(`Visualizzate ${totalPositions} ${modeText} da ${uniqueVessels} navi`, 'success');
+        
+      } catch (error) {
+        console.error('Error loading AIS vessels:', error);
+        showStatus('Errore caricamento navi AIS', 'error');
+      }
+    }
+    
+    // Create density grid layer
+    function createDensityGridLayer(densityData, timeMinutes) {
+      const metadata = densityData.grid_metadata;
+      const gridData = densityData.density_grids[timeMinutes.toString()];
+      
+      if (!gridData) return null;
+      
+      const bounds = metadata.bounds;
+      const lonCoords = metadata.lon_coords;
+      const latCoords = metadata.lat_coords;
+      const riskGrid = gridData.risk_grid;
+      
+      const rectangles = [];
+      
+      for (let latIdx = 0; latIdx < latCoords.length; latIdx++) {
+        for (let lonIdx = 0; lonIdx < lonCoords.length; lonIdx++) {
+          const risk = riskGrid[latIdx][lonIdx];
+          const density = gridData.density_grid[latIdx][lonIdx];
+          
+          // Show ALL cells, not just those with vessels
+          const lat = latCoords[latIdx];
+          const lon = lonCoords[lonIdx];
+          
+          // Calculate cell bounds (approximate)
+          const latDelta = (bounds.north - bounds.south) / latCoords.length;
+          const lonDelta = (bounds.east - bounds.west) / lonCoords.length;
+          
+          const cellBounds = [
+            [lat - latDelta/2, lon - lonDelta/2],
+            [lat + latDelta/2, lon + lonDelta/2]
+          ];
+          
+          // Different styling for empty vs occupied cells
+          const isEmpty = density === 0;
+          const rectangle = L.rectangle(cellBounds, {
+            color: isEmpty ? '#cccccc' : getRiskColor(risk),
+            weight: 1,
+            fillOpacity: isEmpty ? 0.1 : 0.8,
+            fillColor: isEmpty ? '#f0f0f0' : getRiskColor(risk),
+            vesselCount: density,
+            riskLevel: risk,
+            lat: lat,
+            lon: lon,
+            timeMinutes: timeMinutes
+          });
+          
+          console.log(`Creating cell: lat=${lat}, lon=${lon}, density=${density}, risk=${risk}, empty=${isEmpty}`);
+          
+          // Add popup
+          rectangle.bindPopup(`
+            <div class="cell-popup">
+              <h5>Cella ${lat.toFixed(3)}, ${lon.toFixed(3)}</h5>
+              <p><strong>Navi:</strong> ${density}</p>
+              <p><strong>Rischio:</strong> ${['Basso', 'Medio', 'Alto'][risk]}</p>
+              <p><strong>Tempo:</strong> ${timeMinutes} min</p>
+            </div>
+          `);
+          
+          // Add click handler for detailed timeline
+          rectangle.on('click', function(e) {
+            showCellTimeline(lat, lon);
+          });
+          
+          rectangles.push(rectangle);
+        }
+      }
+      
+      return L.layerGroup(rectangles);
+    }
+    
+    // Show detailed cell timeline
+    async function showCellTimeline(lat, lon) {
+      try {
+        const response = await fetch(`${API_BASE}/traffic/cell_info?lat=${lat}&lon=${lon}`);
+        const cellInfo = await response.json();
+        
+        if (cellInfo.error) {
+          showStatus(cellInfo.error, 'error');
+          return;
+        }
+        
+        let timelineHtml = `
+          <div class="cell-popup">
+            <h5>Timeline Cella ${lat.toFixed(3)}, ${lon.toFixed(3)}</h5>
+        `;
+        
+        cellInfo.timesteps.forEach(timestep => {
+          const riskClass = ['risk-low', 'risk-medium', 'risk-high'][timestep.risk_level];
+          timelineHtml += `
+            <div class="timeline-item ${riskClass}">
+              <strong>${timestep.time_minutes}min:</strong> 
+              ${timestep.vessel_count} navi - ${timestep.risk_label}
+            </div>
+          `;
+        });
+        
+        timelineHtml += '</div>';
+        
+        L.popup()
+          .setLatLng([lat, lon])
+          .setContent(timelineHtml)
+          .openOn(map);
+          
+      } catch (error) {
+        console.error('Error fetching cell timeline:', error);
+        showStatus('Errore nel caricare timeline cella', 'error');
+      }
+    }
+    
+    // Load AIS data
+    async function loadAISData() {
+      const btn = document.getElementById('load-ais-btn');
+      btn.disabled = true;
+      btn.textContent = 'Loading...';
+      showStatus('Caricamento dati AIS...', 'loading');
+      
+      try {
+        const response = await fetch(`${API_BASE}/ais/load`, {
+          method: 'POST'
+        });
+        
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
+        const result = await response.json();
+        showStatus(`Caricati ${result.rows} record AIS per ${result.mmsi_unique} navi`, 'success');
+        
+        // Also load vessels visualization
+        await loadAISVessels();
+        
+      } catch (error) {
+        console.error('Error loading AIS data:', error);
+        showStatus(`Errore caricamento AIS: ${error.message}`, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Load AIS Data';
+      }
+    }
+    
+    // Predict traffic and generate density grid
+    async function predictTraffic() {
+      const btn = document.getElementById('predict-btn');
+      const timeHorizon = document.getElementById('time-horizon').value;
+      const gridResolution = parseFloat(document.getElementById('grid-resolution').value);
+      
+      btn.disabled = true;
+      btn.textContent = 'Predicting...';
+      showStatus('Esecuzione previsione traffico...', 'loading');
+      
+      try {
+        // First run prediction
+        const predictResponse = await fetch(`${API_BASE}/predict`, {
+          method: 'POST'
+        });
+        
+        if (!predictResponse.ok) {
+          throw new Error(`Errore previsione: ${predictResponse.status}`);
+        }
+        
+        // Then calculate density grid
+        const densityResponse = await fetch(`${API_BASE}/traffic/density_grid`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            time_horizon_minutes: parseInt(timeHorizon),
+            grid_resolution_km: gridResolution
+          })
+        });
+        
+        if (!densityResponse.ok) {
+          throw new Error(`Errore griglia densità: ${densityResponse.status}`);
+        }
+        
+        const densityData = await densityResponse.json();
+        currentDensityData = densityData;
+        
+        console.log('Density data received:', densityData);
+        console.log('Available timesteps:', Object.keys(densityData.density_grids));
+        
+        // Clear existing layers
+        Object.values(densityLayers).forEach(layer => {
+          map.removeLayer(layer);
+        });
+        densityLayers = {};
+        
+        // Create layers for each timestep
+        const timestepSelect = document.getElementById('timestep-select');
+        timestepSelect.innerHTML = ''; // Clear existing options
+        
+        Object.keys(densityData.density_grids).forEach(timeKey => {
+          const layer = createDensityGridLayer(densityData, parseInt(timeKey));
+          if (layer) {
+            densityLayers[timeKey] = layer;
+            
+            // Add option to timestep selector
+            const option = document.createElement('option');
+            option.value = timeKey;
+            option.textContent = `${timeKey} minuti`;
+            timestepSelect.appendChild(option);
+          }
+        });
+        
+        // Enable timestep selector
+        timestepSelect.disabled = false;
+        
+        // Show first timestep by default
+        const firstTimeKey = Object.keys(densityLayers)[0];
+        if (firstTimeKey) {
+          map.addLayer(densityLayers[firstTimeKey]);
+          timestepSelect.value = firstTimeKey;
+        }
+        
+        // Add event listener for timestep change
+        timestepSelect.addEventListener('change', function() {
+          const selectedTime = this.value;
+          
+          // Remove all density layers
+          Object.values(densityLayers).forEach(layer => {
+            if (map.hasLayer(layer)) {
+              map.removeLayer(layer);
+            }
+          });
+          
+          // Add selected timestep layer
+          if (selectedTime && densityLayers[selectedTime]) {
+            map.addLayer(densityLayers[selectedTime]);
+          }
+        });
+        
+        updateStats(densityData.statistics);
+        showStatus(`Griglia densità calcolata per ${Object.keys(densityLayers).length} timestep`, 'success');
+        
+      } catch (error) {
+        console.error('Error predicting traffic:', error);
+        showStatus(`Errore previsione: ${error.message}`, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Predict Traffic';
+      }
+    }
+    
+    // Event listeners
+    document.getElementById('load-ais-btn').addEventListener('click', loadAISData);
+    document.getElementById('predict-btn').addEventListener('click', predictTraffic);
+    document.getElementById('show-vessels-btn').addEventListener('click', loadAISVessels);
+    document.getElementById('show-trajectories').addEventListener('change', loadAISVessels);
+    
+    // Initialize map on page load
+    document.addEventListener('DOMContentLoaded', function() {
+      initMap();
+      showStatus('Sistema pronto. Carica dati AIS e esegui previsione.', 'success');
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Maritime Traffic Safety - Test</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    body { 
+      margin: 0; 
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+    }
+    
+    #map { 
+      height: 100vh; 
+      width: 100vw; 
+    }
+    
+    #control-panel {
+      position: absolute; 
+      top: 10px; 
+      right: 10px; 
+      z-index: 1000;
+      background: white; 
+      padding: 20px; 
+      border-radius: 8px; 
+      width: 300px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+    }
+    
+    .btn { 
+      width: 100%; 
+      padding: 12px; 
+      border: 0; 
+      border-radius: 6px; 
+      background: #2c3e50; 
+      color: white; 
+      cursor: pointer; 
+      font-weight: 600; 
+      margin: 8px 0;
+    }
+    
+    .btn:hover { 
+      background: #34495e; 
+    }
+    
+    #status { 
+      padding: 10px; 
+      border-radius: 4px; 
+      margin: 10px 0; 
+      font-size: 12px; 
+    }
+    
+    .status.success { 
+      background: #d4edda; 
+      color: #155724; 
+    }
+    
+    .status.error { 
+      background: #f8d7da; 
+      color: #721c24; 
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  
+  <div id="control-panel">
+    <h3>Maritime Traffic Safety - Test</h3>
+    <div id="status" class="status" style="display: none;"></div>
+    
+    <button id="test-btn" class="btn">Test Map</button>
+    <button id="load-ais-btn" class="btn">Load AIS Data</button>
+    <button id="show-vessels-btn" class="btn">Show AIS Vessels</button>
+  </div>
+
+  <script>
+    // Global variables
+    let map;
+    let aisLayer = null;
+    
+    // API base URL
+    const API_BASE = 'http://127.0.0.1:8007/api';
+    
+    // Show status message
+    function showStatus(message, type = 'info') {
+      const statusEl = document.getElementById('status');
+      statusEl.className = `status ${type}`;
+      statusEl.textContent = message;
+      statusEl.style.display = 'block';
+      
+      if (type === 'success' || type === 'error') {
+        setTimeout(() => {
+          statusEl.style.display = 'none';
+        }, 5000);
+      }
+    }
+    
+    // Initialize map
+    function initMap() {
+      try {
+        console.log('Initializing map...');
+        map = L.map('map').setView([40.73, 14.18], 11);
+        
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+        
+        // Gulf of Naples bounds
+        const gulfBounds = [
+          [40.50, 13.90], // SW
+          [40.95, 14.45]  // NE
+        ];
+        
+        L.rectangle(gulfBounds, {
+          color: '#2c3e50',
+          weight: 2,
+          fillOpacity: 0.1
+        }).addTo(map);
+        
+        map.fitBounds(gulfBounds);
+        console.log('Map initialized successfully');
+        showStatus('Mappa inizializzata con successo', 'success');
+        
+      } catch (error) {
+        console.error('Error initializing map:', error);
+        showStatus('Errore inizializzazione mappa: ' + error.message, 'error');
+      }
+    }
+    
+    // Test map function
+    function testMap() {
+      console.log('Testing map...');
+      if (map) {
+        showStatus('Mappa già inizializzata', 'success');
+        
+        // Add a test marker
+        L.marker([40.73, 14.18])
+          .addTo(map)
+          .bindPopup('Test Marker - Golfo di Napoli')
+          .openPopup();
+          
+      } else {
+        showStatus('Mappa non inizializzata', 'error');
+      }
+    }
+    
+    // Load AIS data
+    async function loadAISData() {
+      try {
+        showStatus('Caricamento dati AIS...', 'info');
+        
+        const response = await fetch(API_BASE + '/ais/load', {
+          method: 'POST'
+        });
+        
+        if (!response.ok) {
+          throw new Error('HTTP ' + response.status);
+        }
+        
+        const result = await response.json();
+        showStatus('Caricati ' + result.rows + ' record AIS', 'success');
+        
+      } catch (error) {
+        console.error('Error loading AIS data:', error);
+        showStatus('Errore caricamento AIS: ' + error.message, 'error');
+      }
+    }
+    
+    // Load and display AIS vessels
+    async function loadAISVessels() {
+      try {
+        showStatus('Caricamento navi AIS...', 'info');
+        
+        const response = await fetch(API_BASE + '/ais/points?latest=true&limit=100');
+        const aisData = await response.json();
+        
+        // Clear existing AIS layer
+        if (aisLayer) {
+          map.removeLayer(aisLayer);
+        }
+        
+        const vessels = [];
+        
+        aisData.features.forEach(feature => {
+          const coords = feature.geometry.coordinates;
+          const props = feature.properties;
+          const speed = props.speed || 0;
+          
+          const circle = L.circle([coords[1], coords[0]], {
+            radius: 100,
+            color: speed > 10 ? '#ff0000' : speed > 5 ? '#ffa500' : '#0000ff',
+            fillColor: speed > 10 ? '#ff0000' : speed > 5 ? '#ffa500' : '#0000ff',
+            fillOpacity: 0.7,
+            weight: 2
+          });
+          
+          circle.bindPopup(
+            'MMSI: ' + props.mmsi + '<br>' +
+            'Speed: ' + speed.toFixed(1) + ' knots<br>' +
+            'Time: ' + new Date(props.timestamp).toLocaleString()
+          );
+          
+          vessels.push(circle);
+        });
+        
+        aisLayer = L.layerGroup(vessels);
+        map.addLayer(aisLayer);
+        
+        showStatus('Visualizzate ' + vessels.length + ' navi AIS', 'success');
+        
+      } catch (error) {
+        console.error('Error loading AIS vessels:', error);
+        showStatus('Errore caricamento navi: ' + error.message, 'error');
+      }
+    }
+    
+    // Event listeners
+    document.getElementById('test-btn').addEventListener('click', testMap);
+    document.getElementById('load-ais-btn').addEventListener('click', loadAISData);
+    document.getElementById('show-vessels-btn').addEventListener('click', loadAISVessels);
+    
+    // Initialize map on page load
+    document.addEventListener('DOMContentLoaded', function() {
+      console.log('DOM loaded, initializing map...');
+      initMap();
+    });
+  </script>
+</body>
+</html>

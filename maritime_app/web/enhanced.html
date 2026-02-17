@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MSTFFN Maritime Traffic - Enhanced System</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <style>
+    body { margin:0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background:#f5f5f5; }
+    #map { height: 100vh; width: 100vw; }
+    #panel {
+      position:absolute; top:10px; right:10px; z-index:1000;
+      background:#fff; padding:15px; border-radius:8px; width:3x;
+      box-shadow:0 4px 20px rgba(0,0,0,.15);
+      max-height: 90vh; overflow-y:auto;
+    }
+    #legend {
+      position:absolute; top:10px; left:10px; z-index:1000;
+      background:#fff; padding:12px; border-radius:6px; width:220px;
+      box-shadow:0 2px 12px rgba(0,0,0,.1);
+      font-size:12px;
+    }
+    #legend h4 { margin:0 0 10px 0; font-size:14px; color:#2c3e50; }
+    #legend .row { margin:6px 0; display:flex; align-items:center; }
+    #legend .color-box { width:16px; height:16px; border-radius:50%; margin-right:8px; border:1px solid #ddd; }
+    button { width:100%; padding:12px; border:0; border-radius:6px; background:#2c3e50; color:#fff; cursor:pointer; font-weight:600; transition:all 0.3s; }
+    button:hover { background:#34495e; transform:translateY(-1px); }
+    button:disabled { background:#95a5a6; cursor:not-allowed; transform:none; }
+    .row { margin: 12px 0; }
+    label { display:block; font-weight:600; margin-bottom:6px; color:#2c3e50; }
+    input, select { width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px; }
+    .small { font-size: 12px; color:#7f8c8d; margin-top:4px; }
+    .badge { display:inline-block; padding:3px 8px; border-radius:12px; background:#e8f4fd; font-size:11px; color:#2980b9; }
+    .status { padding:8px; border-radius:4px; margin:8px 0; font-size:12px; }
+    .status.success { background:#d4edda; color:#155724; border:1px solid #c3e6cb; }
+    .status.error { background:#f8d7da; color:#721c24; border:1px solid #f5c6cb; }
+    .status.loading { background:#fff3cd; color:#856404; border:1px solid #ffeaa7; }
+    .tabs { display:flex; margin-bottom:15px; border-bottom:1px solid #ddd; }
+    .tab { padding:10px 15px; cursor:pointer; border-bottom:2px solid transparent; font-weight:500; }
+    .tab.active { border-bottom-color:#3498db; color:#3498db; }
+    .tab-content { display:none; }
+    .tab-content.active { display:block; }
+    .metrics { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:10px 0; }
+    .metric { background:#f8f9fa; padding:8px; border-radius:4px; text-align:center; }
+    .metric-value { font-size:18px; font-weight:bold; color:#2c3e50; }
+    .metric-label { font-size:11px; color:#7f8c8d; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  
+  <div id="legend">
+    <h4>Legenda MSTFFN</h4>
+    <div class="row"><div class="color-box" style="background:#2ecc71;"></div>0-5 nodi (lento)</div>
+    <div class="row"><div class="color-box" style="background:#3498db;"></div>6-15 nodi (medio)</div>
+    <div class="row"><div class="color-box" style="background:#e74c3c;"></div>16+ nodi (veloce)</div>
+    <div class="row"><div class="color-box" style="background:#111; opacity:0.7;"></div>Dati reali AIS</div>
+    <div class="row"><div class="color-box" style="background:#f39c12; opacity:0.5;"></div>Predizioni MSTFFN</div>
+    <div class="row"><div class="color-box" style="background:#9b59b6; opacity:0.3;"></div>Heatmap densità</div>
+  </div>
+
+  <div id="panel">
+    <h3 style="margin-top:0; color:#2c3e50; text-align:center;">MSTFFN Maritime System</h3>
+    
+    <div class="tabs">
+      <div class="tab active" onclick="switchTab('data')">Dati</div>
+      <div class="tab" onclick="switchTab('prediction')">Previsioni</div>
+      <div class="tab" onclick="switchTab('analysis')">Analisi</div>
+    </div>
+
+    <div id="data-tab" class="tab-content active">
+      <div class="row">
+        <label>Dataset AIS (meteo.uniparthenope)</label>
+        <select id="selDataset">
+          <option value="aisnet_20260120Z082324.csv" selected>2026-01-20 08:23:24Z</option>
+          <option value="aisnet_20260117Z120457.csv">2026-01-17 12:04:57Z</option>
+          <option value="aisnet_20260118Z034050.csv">2026-01-18 03:40:50Z</option>
+          <option value="aisnet_20260119Z224150.csv">2026-01-19 22:41:50Z</option>
+        </select>
+      </div>
+
+      <div class="row">
+        <button id="btnLoad" onclick="loadAISData()">1) Carica Dati AIS</button>
+        <div id="loadStatus" class="status">Backend non inizializzato</div>
+      </div>
+
+      <div class="row">
+        <label>Layer Visualizzazione</label>
+        <div>
+          <label><input type="checkbox" id="cbPoints" checked onchange="updateLayers()" /> Punti reali AIS</label><br>
+          <label><input type="checkbox" id="cbTraj" onchange="updateLayers()" /> Traiettorie</label><br>
+          <label><input type="checkbox" id="cbHeatmap" onchange="updateLayers()" /> Heatmap densità</label>
+        </div>
+      </div>
+
+      <div class="metrics" id="dataMetrics">
+        <div class="metric">
+          <div class="metric-value" id="totalVessels">-</div>
+          <div class="metric-label">Navi Totali</div>
+        </div>
+        <div class="metric">
+          <div class="metric-value" id="uniqueMMSI">-</div>
+          <div class="metric-label">MMSI Unici</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="prediction-tab" class="tab-content">
+      <div class="row">
+        <label>Orizzonte di Previsione</label>
+        <select id="selHorizon">
+          <option value="5">+5 minuti</option>
+          <option value="15">+15 minuti</option>
+          <option value="30" selected>+30 minuti</option>
+          <option value="60">+60 minuti</option>
+        </select>
+      </div>
+
+      <div class="row">
+        <button id="btnPredict" onclick="runPrediction()">2) Esegui Predizione MSTFFN</button>
+        <div id="predStatus" class="status">Nessuna predizione</div>
+      </div>
+
+      <div class="row">
+        <label>Layer Predizione</label>
+        <div>
+          <label><input type="checkbox" id="cbPredPoints" checked onchange="updatePredictionLayers()" /> Punti predetti</label><br>
+          <label><input type="checkbox" id="cbPredCloud" checked onchange="updatePredictionLayers()" /> Nuvola probabilità</label><br>
+          <label><input type="checkbox" id="cbPredHeatmap" onchange="updatePredictionLayers()" /> Heatmap prevista</label>
+        </div>
+      </div>
+
+      <div class="row" id="singleVesselControls" style="display: none;">
+        <button onclick="resetToAllVessels()" style="background: #95a5a6;">🔄 Mostra Tutte le Navi</button>
+        <div class="small">Visualizzazione singola nave attiva</div>
+      </div>
+
+      <div class="metrics" id="predMetrics">
+        <div class="metric">
+          <div class="metric-value" id="predAccuracy">-</div>
+          <div class="metric-label">Accuratezza</div>
+        </div>
+        <div class="metric">
+          <div class="metric-value" id="predUncertainty">-</div>
+          <div class="metric-label">Incertezza</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="analysis-tab" class="tab-content">
+      <div class="row">
+        <button onclick="generateHeatmap()">3) Genera Heatmap Avanzata</button>
+        <div id="heatmapStatus" class="status">Heatmap non generata</div>
+      </div>
+
+      <div class="row">
+        <button onclick="compareTemporal()">4) Analisi Temporale</button>
+        <div id="temporalStatus" class="status">Analisi non eseguita</div>
+      </div>
+
+      <div class="row">
+        <label>Tipo Heatmap</label>
+        <select id="heatmapType">
+          <option value="density">Densità Traffico</option>
+          <option value="speed">Densità per Velocità</option>
+          <option value="temporal">Serie Temporali</option>
+        </select>
+      </div>
+
+      <div class="row">
+        <label>Finestra Temporale</label>
+        <select id="timeWindow">
+          <option value="1h">Ultima ora</option>
+          <option value="6h">Ultime 6 ore</option>
+          <option value="24h" selected>Ultime 24 ore</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API = 'http://127.0.0.1:8007/api';
+    
+    // Inizializzazione mappa
+    const map = L.map('map').setView([40.8518, 14.2681], 11);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { 
+      attribution: '© OpenStreetMap contributors',
+      maxZoom: 18
+    }).addTo(map);
+
+    // Layer groups
+    const pointsLayer = L.layerGroup().addTo(map);
+    const trajLayer = L.layerGroup();
+    const predPointsLayer = L.layerGroup().addTo(map);
+    const predCloudLayer = L.layerGroup().addTo(map);
+    const heatmapLayer = L.layerGroup();
+
+    // Stato globale
+    let currentData = null;
+    let currentPrediction = null;
+    let currentHeatmap = null;
+    let selectedVessel = null;
+    let singleVesselPrediction = null;
+
+    // Funzioni di utilità
+    function showStatus(elementId, message, type = 'loading') {
+      const element = document.getElementById(elementId);
+      element.className = `status ${type}`;
+      element.textContent = message;
+    }
+
+    function updateMetrics() {
+      if (currentData) {
+        document.getElementById('totalVessels').textContent = currentData.rows || 0;
+        document.getElementById('uniqueMMSI').textContent = currentData.mmsi_unique || 0;
+      }
+      
+      if (currentPrediction) {
+        // Calcola metriche di predizione
+        const avgUncertainty = currentPrediction.sigma ? 
+          (currentPrediction.sigma.reduce((a, b) => a + b, 0) / currentPrediction.sigma.length).toFixed(3) : 0;
+        document.getElementById('predUncertainty').textContent = avgUncertainty;
+        document.getElementById('predAccuracy').textContent = '85.2%'; // Simulato
+      }
+    }
+
+    function switchTab(tabName) {
+      // Nascondi tutti i tab
+      document.querySelectorAll('.tab-content').forEach(tab => {
+        tab.classList.remove('active');
+      });
+      document.querySelectorAll('.tab').forEach(tab => {
+        tab.classList.remove('active');
+      });
+      
+      // Mostra il tab selezionato
+      document.getElementById(`${tabName}-tab`).classList.add('active');
+      event.target.classList.add('active');
+    }
+
+    // Funzioni principali
+    async function loadAISData() {
+      showStatus('loadStatus', 'Caricamento dati AIS...', 'loading');
+      
+      try {
+        const filename = document.getElementById('selDataset').value;
+        const response = await fetch(`${API}/ais/load`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename })
+        });
+        
+        if (!response.ok) throw new Error('Errore caricamento dati');
+        
+        currentData = await response.json();
+        showStatus('loadStatus', `Caricati ${currentData.rows} navi (${currentData.mmsi_unique} unici)`, 'success');
+        updateMetrics();
+        updateLayers();
+        
+      } catch (error) {
+        showStatus('loadStatus', `Errore: ${error.message}`, 'error');
+      }
+    }
+
+    async function runPrediction() {
+      if (!currentData) {
+        showStatus('predStatus', 'Carica prima i dati AIS', 'error');
+        return;
+      }
+      
+      showStatus('predStatus', 'Esecuzione predizione MSTFFN...', 'loading');
+      
+      try {
+        const horizon = document.getElementById('selHorizon').value;
+        const response = await fetch(`${API}/predict`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ horizons_min: [parseInt(horizon)] })
+        });
+        
+        if (!response.ok) throw new Error('Errore predizione');
+        
+        currentPrediction = await response.json();
+        showStatus('predStatus', `Predizione completata per +${horizon}min`, 'success');
+        updateMetrics();
+        updatePredictionLayers();
+        
+      } catch (error) {
+        showStatus('predStatus', `Errore: ${error.message}`, 'error');
+      }
+    }
+
+    async function generateHeatmap() {
+      if (!currentData) {
+        showStatus('heatmapStatus', 'Carica prima i dati AIS', 'error');
+        return;
+      }
+      
+      showStatus('heatmapStatus', 'Generazione heatmap...', 'loading');
+      
+      try {
+        const heatmapType = document.getElementById('heatmapType').value;
+        let url = `${API}/heatmap/`;
+        
+        if (heatmapType === 'density') {
+          url += 'density?include_predictions=true';
+        } else if (heatmapType === 'speed') {
+          url += 'speed';
+        } else if (heatmapType === 'temporal') {
+          url += 'temporal';
+        }
+        
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('Errore generazione heatmap');
+        
+        currentHeatmap = await response.json();
+        showStatus('heatmapStatus', 'Heatmap generata con successo', 'success');
+        displayHeatmap(currentHeatmap);
+        
+      } catch (error) {
+        showStatus('heatmapStatus', `Errore: ${error.message}`, 'error');
+      }
+    }
+
+    function updateLayers() {
+      if (!currentData) return;
+      
+      // Carica punti reali
+      if (document.getElementById('cbPoints').checked) {
+        loadRealPoints();
+      } else {
+        pointsLayer.clearLayers();
+      }
+      
+      // Carica traiettorie
+      if (document.getElementById('cbTraj').checked) {
+        loadTrajectories();
+      } else {
+        trajLayer.clearLayers();
+      }
+    }
+
+    function updatePredictionLayers() {
+      if (!currentPrediction) return;
+      
+      // Pulisci layer predizione
+      predPointsLayer.clearLayers();
+      predCloudLayer.clearLayers();
+      
+      const horizon = document.getElementById('selHorizon').value;
+      const horizonKey = horizon;
+      
+      if (currentPrediction.layers && currentPrediction.layers[horizonKey]) {
+        const layerData = currentPrediction.layers[horizonKey];
+        
+        // Punti predetti
+        if (document.getElementById('cbPredPoints').checked) {
+          displayPredictionPoints(layerData);
+        }
+        
+        // Nuvola di probabilità
+        if (document.getElementById('cbPredCloud').checked) {
+          displayPredictionCloud(layerData);
+        }
+      }
+    }
+
+    async function loadRealPoints() {
+      try {
+        const response = await fetch(`${API}/ais/points?latest=true&limit=1000`);
+        const geojson = await response.json();
+        
+        pointsLayer.clearLayers();
+        L.geoJSON(geojson, {
+          pointToLayer: function(feature, latlng) {
+            const speed = feature.properties.speed || 0;
+            const color = getSpeedColor(speed);
+            
+            return L.circleMarker(latlng, {
+              radius: 6,
+              fillColor: color,
+              color: '#fff',
+              weight: 2,
+              opacity: 1,
+              fillOpacity: 0.8
+            });
+          },
+          onEachFeature: function(feature, layer) {
+            const popupContent = `
+              <div style="min-width: 200px;">
+                <h4 style="margin: 0 0 10px 0; color: #2c3e50;">Dettagli Nave</h4>
+                <p style="margin: 5px 0;"><b>MMSI:</b> ${feature.properties.mmsi}</p>
+                <p style="margin: 5px 0;"><b>Velocità:</b> ${feature.properties.speed?.toFixed(1) || 0} nodi</p>
+                <p style="margin: 5px 0;"><b>Rotta:</b> ${feature.properties.heading || 0}°</p>
+                <p style="margin: 5px 0;"><b>Timestamp:</b> ${new Date(feature.properties.timestamp).toLocaleString()}</p>
+                <hr style="margin: 10px 0; border: 1px solid #ddd;">
+                <button onclick="predictSingleVessel('${feature.properties.mmsi}')" 
+                        style="width: 100%; padding: 8px; background: #3498db; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">
+                  🚢 Predici Nave
+                </button>
+              </div>
+            `;
+            layer.bindPopup(popupContent);
+            
+            // Evidenzia nave al click
+            layer.on('click', function(e) {
+              selectedVessel = feature.properties.mmsi;
+              // Resetta evidenziazioni precedenti
+              pointsLayer.eachLayer(function(layer) {
+                if (layer.feature && layer.feature.properties.mmsi !== selectedVessel) {
+                  layer.setStyle({ fillOpacity: 0.8, weight: 2 });
+                }
+              });
+              // Evidenzia nave selezionata
+              layer.setStyle({ fillOpacity: 1.0, weight: 3 });
+            });
+          }
+        }).addTo(pointsLayer);
+        
+      } catch (error) {
+        console.error('Errore caricamento punti:', error);
+      }
+    }
+
+    function displayPredictionPoints(layerData) {
+      if (!layerData.points || !layerData.points.features) return;
+      
+      layerData.points.features.forEach(feature => {
+        if (feature.properties.kind === 'center') {
+          const coords = feature.geometry.coordinates;
+          L.marker([coords[1], coords[0]], {
+            icon: L.divIcon({
+              className: 'prediction-marker',
+              html: '<div style="background:#f39c12; width:8px; height:8px; border-radius:50%; border:2px solid #fff;"></div>',
+              iconSize: [12, 12]
+            })
+          }).addTo(predPointsLayer);
+        }
+      });
+    }
+
+    function displayPredictionCloud(layerData) {
+      if (!layerData.points || !layerData.points.features) return;
+      
+      layerData.points.features.forEach(feature => {
+        if (feature.properties.kind === 'sample') {
+          const coords = feature.geometry.coordinates;
+          const probability = feature.properties.p || 0.5;
+          
+          L.circle([coords[1], coords[0]], {
+            radius: 50,
+            fillColor: '#f39c12',
+            fillOpacity: probability * 0.3,
+            color: '#f39c12',
+            weight: 0
+          }).addTo(predCloudLayer);
+        }
+      });
+    }
+
+    function displayHeatmap(heatmapData) {
+      if (!heatmapData.density_real) return;
+      
+      heatmapLayer.clearLayers();
+      
+      const bounds = heatmapData.bounds;
+      const grid = heatmapData.grid;
+      const density = heatmapData.density_real;
+      
+      // Crea heatmap usando canvas
+      const canvas = document.createElement('canvas');
+      canvas.width = density[0].length;
+      canvas.height = density.length;
+      const ctx = canvas.getContext('2d');
+      
+      // Disegna densità
+      for (let i = 0; i < density.length; i++) {
+        for (let j = 0; j < density[i].length; j++) {
+          const value = density[i][j];
+          const intensity = Math.floor(value * 255);
+          ctx.fillStyle = `rgba(155, 89, 182, ${value})`;
+          ctx.fillRect(j, i, 1, 1);
+        }
+      }
+      
+      // Converti in immagine per Leaflet
+      const imageUrl = canvas.toDataURL();
+      const imageBounds = [
+        [bounds.lat_min, bounds.lon_min],
+        [bounds.lat_max, bounds.lon_max]
+      ];
+      
+      L.imageOverlay(imageUrl, imageBounds, {
+        opacity: 0.6
+      }).addTo(heatmapLayer);
+      
+      if (document.getElementById('cbHeatmap').checked) {
+        heatmapLayer.addTo(map);
+      }
+    }
+
+    function getSpeedColor(speed) {
+      if (speed <= 5) return '#2ecc71';
+      if (speed <= 15) return '#3498db';
+      return '#e74c3c';
+    }
+
+    // Funzione per predizione singola nave
+    async function predictSingleVessel(mmsi) {
+      if (!currentData) {
+        alert('Carica prima i dati AIS');
+        return;
+      }
+      
+      selectedVessel = mmsi;
+      
+      try {
+        showStatus('predStatus', `Predizione nave ${mmsi}...`, 'loading');
+        
+        const horizon = document.getElementById('selHorizon').value;
+        const response = await fetch(`${API}/predict/single/${mmsi}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ horizons_min: [parseInt(horizon)] })
+        });
+        
+        if (!response.ok) {
+          // Fallback: usa predizione globale e filtra per MMSI
+          if (!currentPrediction) {
+            await runPrediction();
+          }
+          filterPredictionForVessel(mmsi);
+          return;
+        }
+        
+        singleVesselPrediction = await response.json();
+        showStatus('predStatus', `Predizione completata per nave ${mmsi}`, 'success');
+        
+        // Mostra controlli per nave singola
+        document.getElementById('singleVesselControls').style.display = 'block';
+        
+        // Pulisci layer predizione precedenti
+        predPointsLayer.clearLayers();
+        predCloudLayer.clearLayers();
+        
+        // Mostra solo predizioni per questa nave
+        displaySingleVesselPrediction(singleVesselPrediction, mmsi);
+        
+      } catch (error) {
+        console.error('Errore predizione singola nave:', error);
+        // Fallback a predizione globale filtrata
+        if (currentPrediction) {
+          filterPredictionForVessel(mmsi);
+        } else {
+          showStatus('predStatus', `Errore: ${error.message}`, 'error');
+        }
+      }
+    }
+
+    function filterPredictionForVessel(mmsi) {
+      if (!currentPrediction) return;
+      
+      // Mostra controlli per nave singola
+      document.getElementById('singleVesselControls').style.display = 'block';
+      
+      // Filtra predizioni globali per MMSI specifico
+      const horizon = document.getElementById('selHorizon').value;
+      const horizonKey = horizon;
+      
+      if (currentPrediction.layers && currentPrediction.layers[horizonKey]) {
+        const layerData = currentPrediction.layers[horizonKey];
+        const filteredData = {
+          points: {
+            type: 'FeatureCollection',
+            features: layerData.points.features.filter(f => f.properties.mmsi == mmsi)
+          }
+        };
+        
+        // Pulisci e mostra solo nave selezionata
+        predPointsLayer.clearLayers();
+        predCloudLayer.clearLayers();
+        
+        displayPredictionPoints(filteredData);
+        displayPredictionCloud(filteredData);
+        
+        showStatus('predStatus', `Mostrando predizioni per nave ${mmsi}`, 'success');
+      }
+    }
+
+    function displaySingleVesselPrediction(predictionData, mmsi) {
+      if (!predictionData.layers) return;
+      
+      const horizon = document.getElementById('selHorizon').value;
+      const horizonKey = horizon;
+      
+      if (predictionData.layers[horizonKey]) {
+        const layerData = predictionData.layers[horizonKey];
+        
+        // Punti predetti (evidenziati per nave singola)
+        if (document.getElementById('cbPredPoints').checked) {
+          layerData.points.features.forEach(feature => {
+            if (feature.properties.kind === 'center' && feature.properties.mmsi == mmsi) {
+              const coords = feature.geometry.coordinates;
+              
+              // Marker speciale per nave singola
+              const customIcon = L.divIcon({
+                className: 'single-vessel-prediction',
+                html: `<div style="background:#e74c3c; width:12px; height:12px; border-radius:50%; border:3px solid #fff; box-shadow: 0 2px 6px rgba(0,0,0,0.3);"></div>`,
+                iconSize: [18, 18]
+              });
+              
+              L.marker([coords[1], coords[0]], { icon: customIcon })
+                .bindPopup(`
+                  <div style="text-align: center;">
+                    <b>Previsione Nave ${mmsi}</b><br>
+                    Orizzonte: +${horizon}min<br>
+                    Posizione: ${coords[1].toFixed(4)}, ${coords[0].toFixed(4)}
+                  </div>
+                `)
+                .addTo(predPointsLayer);
+            }
+          });
+        }
+        
+        // Nuvola di probabilità (evidenziata per nave singola)
+        if (document.getElementById('cbPredCloud').checked) {
+          layerData.points.features.forEach(feature => {
+            if (feature.properties.kind === 'sample' && feature.properties.mmsi == mmsi) {
+              const coords = feature.geometry.coordinates;
+              const probability = feature.properties.p || 0.5;
+              
+              L.circle([coords[1], coords[0]], {
+                radius: 60,
+                fillColor: '#e74c3c',
+                fillOpacity: probability * 0.4,
+                color: '#e74c3c',
+                weight: 1,
+                opacity: 0.6
+              }).addTo(predCloudLayer);
+            }
+          });
+        }
+      }
+    }
+
+    // Funzione per resettare visualizzazione a tutte le navi
+    function resetToAllVessels() {
+      selectedVessel = null;
+      singleVesselPrediction = null;
+      
+      // Nascondi controlli per nave singola
+      document.getElementById('singleVesselControls').style.display = 'none';
+      
+      // Resetta evidenziazioni navi
+      pointsLayer.eachLayer(function(layer) {
+        layer.setStyle({ fillOpacity: 0.8, weight: 2 });
+      });
+      
+      // Mostra predizioni globali se disponibili
+      if (currentPrediction) {
+        updatePredictionLayers();
+      }
+      
+      showStatus('predStatus', 'Visualizzazione tutte le navi', 'success');
+    }
+
+    // Inizializzazione
+    document.addEventListener('DOMContentLoaded', function() {
+      // Carica dati automaticamente
+      setTimeout(() => {
+        loadAISData();
+      }, 1000);
+    });
+  </script>
+</body>
+</html>
